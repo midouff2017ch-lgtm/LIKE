@@ -9,6 +9,7 @@ import aiohttp
 # --- Flask Keep-Alive ---
 app = Flask(__name__)
 bot_name = "Loading..."
+ALLOWED_CHANNEL_ID = 1416458716147880111  # القناة المسموح بها فقط
 
 @app.route("/")
 def home():
@@ -18,154 +19,134 @@ def run_flask():
     port = int(os.environ.get("PORT", 10000))
     app.run(host='0.0.0.0', port=port)
 
-# --- Discord Bot Setup ---
-TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
-if not TOKEN:
-    raise ValueError("Missing DISCORD_BOT_TOKEN in environment variables")
+# --- Discord Bot Class ---
+class MyBot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
+        self.session = None
 
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix="!", intents=intents)
+    async def setup_hook(self):
+        # جلسة aiohttp واحدة
+        self.session = aiohttp.ClientSession()
 
-DEFAULT_LANG = "en"
-user_languages = {}
-session = None  # جلسة aiohttp واحدة لجميع الطلبات
+        # تشغيل Flask في Thread
+        flask_thread = threading.Thread(target=run_flask, daemon=True)
+        flask_thread.start()
+        print("🚀 Flask server started in background")
 
-# --- Keep-Alive & Global Session Setup ---
-@tasks.loop(minutes=1)
-async def keep_alive():
-    """Ping Render URL كل دقيقة لضمان البوت لا ينام"""
-    global session
-    if session:
+        # بدء المهام الدورية
+        self.update_status.start()
+        self.keep_alive.start()
+
+    async def close(self):
+        if self.session:
+            await self.session.close()
+        await super().close()
+
+    # --- Keep-Alive ---
+    @tasks.loop(minutes=1)
+    async def keep_alive(self):
+        if self.session:
+            try:
+                url = "https://like-jwmt.onrender.com"
+                async with self.session.get(url) as response:
+                    print(f"💡 Keep-Alive ping status: {response.status}")
+            except Exception as e:
+                print(f"⚠️ Keep-Alive error: {e}")
+
+    @keep_alive.before_loop
+    async def before_keep_alive(self):
+        await self.wait_until_ready()
+
+    # --- تحديث الحالة ---
+    @tasks.loop(minutes=5)
+    async def update_status(self):
         try:
-            url = "https://info-1-rngw.onrender.com"
-            async with session.get(url) as response:
-                print(f"💡 Keep-Alive ping status: {response.status}")
+            activity = discord.Activity(
+                type=discord.ActivityType.watching,
+                name=f"{len(self.guilds)} servers"
+            )
+            await self.change_presence(activity=activity)
         except Exception as e:
-            print(f"⚠️ Keep-Alive error: {e}")
+            print(f"⚠️ Status update failed: {e}")
 
-@keep_alive.before_loop
-async def before_keep_alive():
-    await bot.wait_until_ready()
+    @update_status.before_loop
+    async def before_status_update(self):
+        await self.wait_until_ready()
 
-# --- Check Ban Function (باستخدام نفس الجلسة) ---
-async def check_ban(uid):
-    global session
-    if not session:
-        print("⚠️ Session not initialized for check_ban")
-        return None
-    api_url = f"https://rawthug.onrender.com/check_ban/{uid}"
+    # --- السماح فقط للقناة المحددة + حذف الرسائل الغير أوامر ---
+    async def on_message(self, message):
+        if message.author.bot:
+            return
+
+        if message.channel.id == ALLOWED_CHANNEL_ID:
+            if not message.content.startswith("!like"):
+                try:
+                    await message.delete()
+                    print(f"🗑️ Deleted non-command message from {message.author} in {message.channel}")
+                except discord.Forbidden:
+                    print(f"⚠️ Missing permissions to delete message in {message.channel}")
+                except discord.HTTPException as e:
+                    print(f"⚠️ Failed to delete message: {e}")
+                return
+
+        await self.process_commands(message)
+
+# --- Bot Instance ---
+bot = MyBot()
+
+# --- Like Command ---
+@bot.command(name="like")
+async def like_command(ctx, server: str = None, uid: str = None):
+    if ctx.channel.id != ALLOWED_CHANNEL_ID:
+        embed = discord.Embed(
+            title="⚠️ Command Not Allowed",
+            description=f"This command is only allowed in <#{ALLOWED_CHANNEL_ID}>",
+            color=discord.Color.red()
+        )
+        return await ctx.send(embed=embed)
+
+    if not server or not uid or not uid.isdigit():
+        await ctx.send(f"{ctx.author.mention} ❌ Usage: `!like <server_name> <uid>`")
+        return
+
+    api_url = f"https://like-api-nine.vercel.app/like?uid={uid}&server_name={server}&key=lumina"
+
     try:
-        async with session.get(api_url) as response:
+        async with bot.session.get(api_url) as response:
             if response.status != 200:
-                return None
+                await ctx.send(f"{ctx.author.mention} ❌ API Error ({response.status})")
+                return
+
             res_json = await response.json()
-            if res_json.get("status") != 200:
-                return None
-            info = res_json.get("data", {})
-            return {
-                "is_banned": info.get("is_banned", 0),
-                "nickname": info.get("nickname", ""),
-                "period": info.get("period", 0),
-                "region": info.get("region", "N/A")
-            }
+
+            likes_before = res_json.get("LikesbeforeCommand", "N/A")
+            likes_after = res_json.get("LikesafterCommand", "N/A")
+            nickname = res_json.get("PlayerNickname", "Unknown")
+            remains = res_json.get("remains", "N/A")
+            status = res_json.get("status", "N/A")
+
+            embed = discord.Embed(
+                title="⭐ Like Command Result",
+                color=0x3498db,
+                timestamp=ctx.message.created_at
+            )
+            embed.add_field(name="Player", value=nickname, inline=False)
+            embed.add_field(name="UID", value=uid, inline=True)
+            embed.add_field(name="Server", value=server, inline=True)
+            embed.add_field(name="Likes Before", value=likes_before, inline=True)
+            embed.add_field(name="Likes After", value=likes_after, inline=True)
+            embed.add_field(name="Remains", value=remains, inline=True)
+            embed.add_field(name="Status", value=status, inline=True)
+            embed.set_footer(text="📌 Garena Free Fire | Like System")
+
+            await ctx.send(embed=embed)
+
     except Exception as e:
-        print(f"⚠️ Error in check_ban: {e}")
-        return None
-
-# --- Bot Events ---
-@bot.event
-async def on_ready():
-    global bot_name, session
-    bot_name = str(bot.user)
-    print(f"✅ Bot connected as {bot.user} ({len(bot.guilds)} servers)")
-
-    # إنشاء جلسة aiohttp واحدة
-    if not session:
-        session = aiohttp.ClientSession()
-
-    # Start Flask server
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    print("🚀 Flask server started in background")
-
-    # Start periodic status update and Keep-Alive
-    update_status.start()
-    keep_alive.start()
-
-# --- Bot Commands ---
-@bot.command(name="lang")
-async def change_language(ctx, lang_code: str):
-    lang_code = lang_code.lower()
-    if lang_code not in ["en", "fr"]:
-        await ctx.send("❌ Invalid language. Available: `en`, `fr`")
-        return
-    user_languages[ctx.author.id] = lang_code
-    message = "✅ Language set to English." if lang_code == 'en' else "✅ Langue définie sur le français."
-    await ctx.send(f"{ctx.author.mention} {message}")
-
-@bot.command(name="ID")
-async def check_ban_command(ctx):
-    user_id = ctx.message.content[3:].strip()
-    lang = user_languages.get(ctx.author.id, DEFAULT_LANG)
-
-    if not user_id.isdigit():
-        msg = {
-            "en": f"{ctx.author.mention} ❌ **Invalid UID!**",
-            "fr": f"{ctx.author.mention} ❌ **UID invalide !**"
-        }
-        await ctx.send(msg[lang])
-        return
-
-    ban_status = await check_ban(user_id)
-    if not ban_status:
-        msg = {
-            "en": f"{ctx.author.mention} ❌ Could not get information. Please try again later.",
-            "fr": f"{ctx.author.mention} ❌ Impossible d'obtenir les informations. Veuillez réessayer plus tard."
-        }
-        await ctx.send(msg[lang])
-        return
-
-    is_banned = int(ban_status.get("is_banned", 0))
-    period = ban_status.get("period", "N/A")
-    nickname = ban_status.get("nickname", "NA")
-    region = ban_status.get("region", "N/A")
-
-    embed = discord.Embed(
-        color=0xFF0000 if is_banned else 0x00FF00,
-        timestamp=ctx.message.created_at
-    )
-
-    if is_banned:
-        embed.title = "**▌ Banned Account 🛑 **" if lang == "en" else "**▌ Compte banni 🛑 **"
-        embed.description = (
-            f"**• {'Reason' if lang=='en' else 'Raison'}:** This account used cheats.\n"
-            f"**• {'Duration' if lang=='en' else 'Durée'}:** {period}\n"
-            f"**• {'Nickname' if lang=='en' else 'Pseudo'}:** {nickname}\n"
-            f"**• {'Region' if lang=='en' else 'Région'}:** {region}"
-        )
-        embed.set_image(url="https://i.ibb.co/4gj5P7DH/banned.gif")
-    else:
-        embed.title = "**▌ Clean Account ✅ **" if lang == "en" else "**▌ Compte non banni ✅ **"
-        embed.description = (
-            f"**• {'Status' if lang=='en' else 'Statut'}:** No evidence of cheats.\n"
-            f"**• {'Nickname' if lang=='en' else 'Pseudo'}:** {nickname}\n"
-            f"**• {'Region' if lang=='en' else 'Région'}:** {region}"
-        )
-        embed.set_image(url="https://i.ibb.co/SwKrD67z/notbanned.gif")
-
-    embed.set_footer(text="📌 Garena Free Fire")
-    embed.set_thumbnail(url=ctx.author.avatar.url if ctx.author.avatar else ctx.author.default_avatar.url)
-    await ctx.send(embed=embed)
-
-# --- Periodic Bot Status ---
-@tasks.loop(minutes=5)
-async def update_status():
-    try:
-        activity = discord.Activity(type=discord.ActivityType.watching, name=f"{len(bot.guilds)} servers")
-        await bot.change_presence(activity=activity)
-    except Exception as e:
-        print(f"⚠️ Status update failed: {e}")
+        print(f"⚠️ Error in like_command: {e}")
+        await ctx.send(f"{ctx.author.mention} ❌ Could not fetch like info. Please try again later.")
 
 # --- Run Bot ---
 async def main():
@@ -173,4 +154,7 @@ async def main():
         await bot.start(TOKEN)
 
 if __name__ == "__main__":
+    TOKEN = os.environ.get("DISCORD_BOT_TOKEN")
+    if not TOKEN:
+        raise ValueError("Missing DISCORD_BOT_TOKEN in environment variables")
     asyncio.run(main())
