@@ -158,3 +158,4 @@ if __name__ == "__main__":
     if not TOKEN:
         raise ValueError("Missing DISCORD_BOT_TOKEN in environment variables")
     asyncio.run(main())
+
