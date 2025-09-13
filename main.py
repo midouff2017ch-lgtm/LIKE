@@ -102,7 +102,7 @@ bot = MyBot()
 async def like_command(ctx, server: str = None, uid: str = None):
     if ctx.channel.id != ALLOWED_CHANNEL_ID:
         embed = discord.Embed(
-            title="⚠️ Command Not Allowed",
+            title="Command Not Allowed",
             description=f"This command is only allowed in <#{ALLOWED_CHANNEL_ID}>",
             color=discord.Color.red()
         )
@@ -126,26 +126,34 @@ async def like_command(ctx, server: str = None, uid: str = None):
             likes_after = res_json.get("LikesafterCommand", "N/A")
             nickname = res_json.get("PlayerNickname", "Unknown")
             remains = res_json.get("remains", "N/A")
-            status = res_json.get("status", "N/A")
+            status_code = res_json.get("status", "N/A")
 
-            # بناء المعلومات بشكل مرتب تحت بعض
+            # تحويل كود الحالة إلى نص
+            status_map = {
+                0: "❌ Failed",
+                1: "⚠️ Already Liked",
+                2: "✅ Success"
+            }
+            status_text = status_map.get(status_code, str(status_code))
+
+            # بناء المعلومات بشكل مرتب تحت بعض مع سطر فارغ
             description = (
-                f"**👤 Player:** {nickname}\n"
-                f"**🆔 UID:** {uid}\n"
-                f"**🌍 Server:** {server}\n"
-                f"**👍 Likes Before:** {likes_before}\n"
-                f"**⭐ Likes After:** {likes_after}\n"
-                f"**📦 Remains:** {remains}\n"
-                f"**📌 Status:** {status}"
+                f"**Player:** {nickname}\n\n"
+                f"**UID:** {uid}\n\n"
+                f"**Server:** {server}\n\n"
+                f"**Likes Before:** {likes_before}\n\n"
+                f"**Likes After:** {likes_after}\n\n"
+                f"**Remains:** {remains}\n\n"
+                f"**Status:** {status_text}"
             )
 
             embed = discord.Embed(
-                title="⭐ Like Command Result",
+                title="Like Command Result",
                 description=description,
                 color=0x3498db,
                 timestamp=ctx.message.created_at
             )
-            embed.set_footer(text="📌 Garena Free Fire | Like System")
+            embed.set_footer(text="Garena Free Fire | Like System")
 
             await ctx.send(embed=embed)
 
@@ -164,5 +172,6 @@ if __name__ == "__main__":
     if not TOKEN:
         raise ValueError("Missing DISCORD_BOT_TOKEN in environment variables")
     asyncio.run(main())
+
 
 
