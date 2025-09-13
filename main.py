@@ -128,18 +128,23 @@ async def like_command(ctx, server: str = None, uid: str = None):
             remains = res_json.get("remains", "N/A")
             status = res_json.get("status", "N/A")
 
+            # بناء المعلومات بشكل مرتب تحت بعض
+            description = (
+                f"**👤 Player:** {nickname}\n"
+                f"**🆔 UID:** {uid}\n"
+                f"**🌍 Server:** {server}\n"
+                f"**👍 Likes Before:** {likes_before}\n"
+                f"**⭐ Likes After:** {likes_after}\n"
+                f"**📦 Remains:** {remains}\n"
+                f"**📌 Status:** {status}"
+            )
+
             embed = discord.Embed(
                 title="⭐ Like Command Result",
+                description=description,
                 color=0x3498db,
                 timestamp=ctx.message.created_at
             )
-            embed.add_field(name="Player", value=nickname, inline=False)
-            embed.add_field(name="UID", value=uid, inline=True)
-            embed.add_field(name="Server", value=server, inline=True)
-            embed.add_field(name="Likes Before", value=likes_before, inline=True)
-            embed.add_field(name="Likes After", value=likes_after, inline=True)
-            embed.add_field(name="Remains", value=remains, inline=True)
-            embed.add_field(name="Status", value=status, inline=True)
             embed.set_footer(text="📌 Garena Free Fire | Like System")
 
             await ctx.send(embed=embed)
@@ -147,6 +152,7 @@ async def like_command(ctx, server: str = None, uid: str = None):
     except Exception as e:
         print(f"⚠️ Error in like_command: {e}")
         await ctx.send(f"{ctx.author.mention} ❌ Could not fetch like info. Please try again later.")
+
 
 # --- Run Bot ---
 async def main():
@@ -158,4 +164,5 @@ if __name__ == "__main__":
     if not TOKEN:
         raise ValueError("Missing DISCORD_BOT_TOKEN in environment variables")
     asyncio.run(main())
+
 
